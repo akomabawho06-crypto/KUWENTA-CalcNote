@@ -1,0 +1,17 @@
+{
+  "name": "Kuwenta — notepad calculator",
+  "short_name": "Kuwenta",
+  "description": "Type naturally and every line gets its answer. Units, currency, dates, tags and cloud sync.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#fcfdff",
+  "theme_color": "#eef2fc",
+  "categories": ["productivity", "utilities", "finance"],
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
