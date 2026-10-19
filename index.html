@@ -78,7 +78,7 @@ header.top{display:flex;align-items:center;gap:4px;padding:8px 8px 8px;padding-t
 #pad{height:42vh;height:42dvh}
 .h-num{color:var(--num)}.h-op{color:var(--op)}.h-fn{color:var(--fn);font-weight:500}.h-unit{color:var(--unit)}
 .h-neg{color:var(--neg)}.h-pos{color:var(--pos)}
-.h-dir{color:var(--accent);font-weight:600;background:rgba(229,97,93,.13);border-radius:5px;padding:0 3px;text-decoration:none}
+.h-dir{color:var(--accent);font-weight:600;background:rgba(229,97,93,.13);border-radius:4px;box-shadow:0 0 0 2px rgba(229,97,93,.13);text-decoration:none}
 .h-var{color:var(--var)}.h-def{color:var(--var);font-weight:600}.h-cur{color:var(--cur)}.h-kw{color:var(--fn)}.h-com{color:var(--com);font-style:italic}
 .c-head{color:var(--head);font-weight:600}.c-com{color:var(--com);font-style:italic}
 .c-head{text-decoration:underline;text-decoration-color:rgba(229,97,93,.5);text-decoration-thickness:2px;text-underline-offset:5px}
@@ -197,7 +197,10 @@ pre.rules{background:var(--chrome);border:1px solid var(--line);border-radius:10
 .lgd em{font-style:normal;color:var(--mute);font:400 12.5px var(--mono)}
 .lgd b{font:600 14px var(--mono);color:var(--head)}
 .gn{display:flex;align-items:center;justify-content:flex-end}
-.fold{border:0;background:none;color:var(--accent);font:700 14px/1 var(--ui);padding:0 5px;height:var(--lh);cursor:pointer;flex:none;opacity:1}
+.fold{border:0;background:none;color:var(--accent);font:700 17px/1 var(--ui);padding:0 7px;min-width:30px;height:var(--lh);cursor:pointer;flex:none;opacity:1}
+.nonum .gn{padding-right:2px}
+.bal.fk{cursor:pointer;color:var(--accent);font-weight:600}
+.h-str{color:var(--head)}
 .fold:active{opacity:.55}
 .row.child .tx{background:rgba(63,167,196,.08)}
 .row.child .rs{font-weight:500}
@@ -297,6 +300,8 @@ details.grp .lg{padding-left:12px;padding-right:12px}
   <button data-act="dup" role="menuitem">Duplicate sheet</button>
   <button data-act="folder" role="menuitem">Move to folder…</button>
   <button data-act="block" role="menuitem">Block details</button>
+  <button data-act="foldall" role="menuitem">Hide all entries</button>
+  <button data-act="unfoldall" role="menuitem">Show all entries</button>
   <button data-act="tags" role="menuitem">Tag totals</button>
   <button data-act="sync" role="menuitem">Sync now</button>
   <hr>
@@ -646,6 +651,7 @@ const RX_DATE=/\d{4}-\d{2}-\d{2}(?!\d)/y;
 const RX_NUM=/0x[0-9a-f]+|0b[01]+|(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.\d+)?(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?/iy;
 const RX_ID=/[A-Za-z_\u00C0-\u024F°µ][A-Za-z0-9_\u00C0-\u024F°µ]*/y;
 const RX_REF=/#(\d+)/y;
+const RX_NUMWORD=/[A-Za-z_\u00C0-\u024F][A-Za-z0-9_\u00C0-\u024F]*[0-9][A-Za-z0-9_\u00C0-\u024F]*/y;
 const RX_TAG=/#([A-Za-z_][A-Za-z0-9_-]*)/y;
 function lex(s,ctx){
   const raw=[];let i=0,m,sp=false;const L=s.length;
@@ -654,6 +660,7 @@ function lex(s,ctx){
     const c=s[i];
     if(c===' '||c==='\t'||c==='\u00a0'||c==='\r'){sp=true;i++;continue;}
     if(c==='/'&&s[i+1]==='/')break;
+    if(c==='"'||c==='\u201c'){const j=s.indexOf(c==='"'?'"':'\u201d',i+1);if(j>0){i=j+1;continue;}}
     if(/[A-Za-z_\u00C0-\u024F]/.test(c)&&(i===0||!/[A-Za-z0-9_]/.test(s[i-1]))){
       let hit=false;
       for(const v of ctx.varList){v.re.lastIndex=i;if((m=v.re.exec(s))){P({t:'var',name:v.name});i+=m[0].length;hit=true;break;}}
@@ -666,6 +673,7 @@ function lex(s,ctx){
       const str=m[0];let v;
       if(/^0x/i.test(str))v=parseInt(str,16);else if(/^0b/i.test(str))v=parseInt(str.slice(2),2);else v=parseFloat(str.replace(/,/g,''));
       i+=str.length;
+      if(!ctx.opts||ctx.opts.numWords!=='amount'){RX_NUMWORD.lastIndex=i;const nw=RX_NUMWORD.exec(s);if(nw&&!ALIAS[nw[0].toLowerCase()]){i+=nw[0].length;continue;}}
       if((s[i]==='k'||s[i]==='M')&&!/[A-Za-z0-9_]/.test(s[i+1]||'')){v*=s[i]==='k'?1e3:1e6;i++;}
       P({t:'num',v});continue;
     }
@@ -1022,13 +1030,16 @@ function evalSheet(text,opts){
   if(blk)closeBlock(blk);
   return {res:out,names:[...vars.keys()],blocks,lines};
 }
+const RX_LBL=/"([^"]*)"|\u201c([^\u201d]*)\u201d|\d+[A-Za-z_\u00C0-\u024F][A-Za-z0-9_\u00C0-\u024F]*[0-9][A-Za-z0-9_\u00C0-\u024F]*|[A-Za-z_\u00C0-\u024F][A-Za-z0-9_\u00C0-\u024F]*/g;
 function lineLabel(text){
   let head=text.split('//')[0].trim();
   if(RX_CHILD.test(text)){const d=parseLeadDate(head);if(d)head=d.rest;}
   const m=RX_ASSIGN.exec(head);
   if(m&&!RESERVED.has(m[1].trim().replace(/\s+/g,' ').toLowerCase()))return m[1].trim();
-  return head.replace(/#[A-Za-z_][A-Za-z0-9_-]*/g,' ').replace(/@[A-Za-z]+/g,' ')
-    .replace(/\d[\d,]*(\.\d+)?|\.\d+/g,' ').replace(/[$€£₱¥₹₩฿₫₺₽+\-*\/^%()=×÷!:]/g,' ').replace(/\s+/g,' ').trim();
+  head=head.replace(/#[A-Za-z_][A-Za-z0-9_-]*/g,' ').replace(/@[A-Za-z]+/g,' ');
+  const words=[];let x;RX_LBL.lastIndex=0;
+  while((x=RX_LBL.exec(head)))words.push(x[1]!==undefined?x[1]:x[2]!==undefined?x[2]:x[0]);
+  return words.join(' ').replace(/\s+/g,' ').trim();
 }
 function lineNote(lines,res,i){
   const ci=lines[i].indexOf('//');
@@ -1442,11 +1453,12 @@ const HELP=[
  ['Budget tracking',[['# Wallet @budget','start with an amount, log what you spend'],['# Daily @ledger','ongoing income and expenses'],['# Salary @allocate','split an amount by percent'],['lunch -120','minus = spent (red)'],['+500 // refund','plus = added (green)'],['Savings 20%','percent line inside @allocate']]],
  ['Linked blocks',[['Allowance','in @allocate, each fund (like Allowance 40%) becomes a name you can use'],['Allowance left','what is left in the "Allowance" @budget block'],['Wallet balance','balance of the "Wallet" @ledger block']]],
  ['Groups & entries',[['PROFIT','a line with indented entries under it becomes a group'],['  Oct 3 sales +2,000','indent 2 spaces = an entry, date is optional'],['  10/12 rent -400','dates: Oct 12, 10/12, 12 Oct or 2026-10-12'],['NET = PROFIT + EXPENSES','group names work like variables'],['+ entry (key above keyboard)','adds an entry with today’s date'],['▾ in the margin','hide or show a group’s entries']]],
+ ['Names with numbers',[['EASYSHOP2','numbers stuck to letters stay part of the name (also A4, 4in1)'],['"7/11" snacks -85','put a name in quotes to keep it as text'],['"…" key','wraps the word at your cursor in quotes']]],
  ['Notes',[['// a comment','ignored'],['# A heading','starts a new block']]]
 ];
 const KEYS=[['+ entry','',2],['sep'],['+','+'],['−','-'],['×','*'],['÷','/'],['^','^'],['%','%'],['(','('],[')',')'],['=','='],[',',', '],['.','.'],['sep'],['$','$'],['₱','₱'],['€','€'],['sep'],
- ['to',' to ',1],['of',' of ',1],['sum','sum',1],['prev','prev',1],['today','today',1],['sqrt','sqrt(',1],['//','// ',1],['#','# ',1],['#tag',' #',1],['@budget',' @budget',1],['@ledger',' @ledger',1],['@split',' @allocate',1]];
-const DEF={theme:'auto',size:'M',decimals:'auto',thousands:true,angle:'deg',lineNums:true,tapFix:true,statScope:'block',showBal:true,autoDate:true};
+ ['to',' to ',1],['of',' of ',1],['sum','sum',1],['prev','prev',1],['today','today',1],['sqrt','sqrt(',1],['//','// ',1],['"…"','',3],['#','# ',1],['#tag',' #',1],['@budget',' @budget',1],['@ledger',' @ledger',1],['@split',' @allocate',1]];
+const DEF={theme:'auto',size:'M',decimals:'auto',thousands:true,angle:'deg',lineNums:true,tapFix:true,statScope:'block',showBal:true,autoDate:true,numWords:'text'};
 const SIZES={S:14,M:16,L:18,XL:21};
 
 /* ---------- state ---------- */
@@ -1515,6 +1527,8 @@ function hl(line,r,varRe,nameSet){
   if(r.name){const m=/^(\s*)([^=]*?)\s*=/.exec(line);if(m)mark(m[1].length,m[1].length+m[2].length,'def');}
   if(varRe){varRe.lastIndex=0;let vm;while((vm=varRe.exec(line))){const st=vm.index+vm[1].length;mark(st,st+vm[2].length,'var');}}
   const live=!!(r.val||r.kind==='err'||r.kind==='soft');
+  line.replace(/"[^"]*"|\u201c[^\u201d]*\u201d/g,(mm,off)=>{mark(off,off+mm.length,'str');return mm;});
+  if(state.settings.numWords!=='amount')line.replace(/\d+[A-Za-z_\u00C0-\u024F][A-Za-z0-9_\u00C0-\u024F]*[0-9][A-Za-z0-9_\u00C0-\u024F]*/g,(mm,off)=>{if(!ALIAS[mm.replace(/^\d+/,'').toLowerCase()])mark(off,off+mm.length,'txt');return mm;});
   if(r.child&&r.dateEnd){const lead=line.length-line.trimStart().length;mark(lead,Math.min(r.dateEnd,line.length),'date');}
   MASTER.lastIndex=0;let m;
   while((m=MASTER.exec(line))){
@@ -1563,7 +1577,7 @@ function render(){
   for(let k=0;k<vlines.length;k++){
     const f=vmap[k];
     if(f===-1){html+='<div class="row k-stub"><span class="gn"></span><span class="tx"><span class="h-stub">'+esc(vlines[k])+'</span></span><span class="rs"></span></div>';continue;}
-    const r=res[f]||{kind:'text'};let rt='',cls='rs',attr='',aux='';
+    const r=res[f]||{kind:'text'};let rt='',cls='rs',attr='',aux='',fkAttr='';
     if(r.val){
       rt=fmtVal(r.val,o);
       const neg=r.val.v!==undefined&&r.val.v<0;
@@ -1574,6 +1588,7 @@ function render(){
       else if(r.kids&&r.kids.length){
         if(r.declared&&r.groupSum){const eq=r.val.v!==undefined&&Math.abs(r.val.v-r.groupSum.v)<1e-9;aux=eq?'Σ ✓':'Σ '+fmtVal(r.groupSum,o);}
         else aux=r.nKids+'×';
+        fkAttr=' data-k="'+esc(fkeys.get(f)||'')+'" data-s="'+(vmap[k+1]===-1?'f':'o')+'"';aux=(vmap[k+1]===-1?'▸ ':'▾ ')+aux;
       }
       const wd=[...rt].length+(aux?1+[...aux].length*.68:0);
       attr=' data-c="'+esc(rt.replace(/^\+/,''))+'" data-w="'+wd.toFixed(1)+'"';
@@ -1584,7 +1599,7 @@ function render(){
     else if(r.kind==='soft'){rt='…';cls+=' so';}
     let fold='';
     if(r.kids&&r.kids.length&&fkeys.has(f)){const folded=vmap[k+1]===-1;fold='<button class="fold" data-k="'+esc(fkeys.get(f))+'" data-s="'+(folded?'f':'o')+'" aria-label="'+(folded?'Show':'Hide')+' entries">'+(folded?'▸':'▾')+'</button>';}
-    html+='<div class="row k-'+r.kind+(r.child?' child':'')+'"><span class="gn">'+fold+(fold?'':'<span>'+(f+1)+'</span>')+'</span><span class="tx">'+hl(vlines[k],r,varRe,nameSet)+'</span><span class="'+cls+'"'+attr+'>'+(aux?'<span class="bal">'+esc(aux)+'</span><span class="amt">'+esc(rt)+'</span>':esc(rt))+'</span></div>';
+    html+='<div class="row k-'+r.kind+(r.child?' child':'')+'"><span class="gn">'+fold+(fold?'':'<span>'+(f+1)+'</span>')+'</span><span class="tx">'+hl(vlines[k],r,varRe,nameSet)+'</span><span class="'+cls+'"'+attr+'>'+(aux?'<span class="bal'+(fkAttr?' fk':'')+'"'+fkAttr+'>'+esc(aux)+'</span><span class="amt">'+esc(rt)+'</span>':esc(rt))+'</span></div>';
   }
   rowsEl.innerHTML=html;
   maxLenLast=maxLen;linesLast=flines.length;
@@ -1609,9 +1624,24 @@ function setFold(key,on){
   s.folds=[...set];reproject();render();save();
 }
 rowsEl.addEventListener('click',e=>{
-  const b=e.target.closest('.fold');if(!b)return;
+  const b=e.target.closest('.fold,.fk');if(!b)return;
   setFold(b.dataset.k,b.dataset.s!=='f');
 });
+function foldAll(on){
+  const fk=groupKeys(lastLines),keys=[];
+  lastRes.forEach((r,i)=>{if(r.kids&&r.kids.length&&fk.has(i))keys.push(fk.get(i));});
+  if(!keys.length){toast('No groups yet. Indent entries under a line to make one.');return;}
+  cur().folds=on?keys:[];reproject();render();save();
+}
+function wrapQuote(){
+  ed.focus({preventScroll:true});
+  const a=ed.selectionStart,b=ed.selectionEnd,v=ed.value;
+  if(a!==b){insertText('"'+v.slice(a,b)+'"');return;}
+  let s0=a,e0=a;const ok=c=>/[A-Za-z0-9_\/.\-]/.test(c||'');
+  while(s0>0&&ok(v[s0-1]))s0--;while(e0<v.length&&ok(v[e0]))e0++;
+  if(e0>s0){ed.setSelectionRange(s0,e0);insertText('"'+v.slice(s0,e0)+'"');return;}
+  insertText('""');ed.setSelectionRange(a+1,a+1);
+}
 const dateLabel=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
 function addEntry(){
   const s=cur(),lines=s.text.split('\n');
@@ -1647,7 +1677,7 @@ ed.addEventListener('beforeinput',e=>{
 });
 function layout(){
   const pw=paper.clientWidth||360;
-  const gw=(state.settings.lineNums?String(linesLast).length*cw+22:14)+(hasGroups?6:0);
+  const gw=state.settings.lineNums?Math.max(String(linesLast).length*cw+22+(hasGroups?6:0),hasGroups?46:0):(hasGroups?38:14);
   const rf=.92,rw=Math.max(64,Math.min(maxLenLast*cw*rf+30,pw*0.44));
   paper.style.setProperty('--gw',gw.toFixed(1)+'px');
   paper.style.setProperty('--rw',rw.toFixed(1)+'px');
@@ -1840,7 +1870,7 @@ async function copy(text){
   toast('Copied '+(text.length>36?'to clipboard':text));
 }
 rowsEl.addEventListener('click',e=>{
-  const r=e.target.closest('.rs');if(!r)return;
+  const r=e.target.closest('.rs');if(!r||e.target.closest('.fk'))return;
   if(r.dataset.c)copy(r.dataset.c);else if(r.dataset.m)toast(r.dataset.m);
 });
 
@@ -1863,6 +1893,8 @@ function numberAt(pos){
     const a=m.index,b=a+m[0].length;
     if(rel>=a&&rel<=b){
       const pc=line[a-1];if(pc&&/[A-Za-z_#]/.test(pc))return null;
+      if(((line.slice(0,a).match(/["\u201c\u201d]/g)||[]).length)%2===1)return null;
+      if(state.settings.numWords!=='amount'){const w=/^[A-Za-z_\u00C0-\u024F][A-Za-z0-9_\u00C0-\u024F]*[0-9][A-Za-z0-9_\u00C0-\u024F]*/.exec(line.slice(b));if(w&&!ALIAS[w[0].toLowerCase()])return null;}
       return {s:ls+a,len:m[0].length,text:m[0]};
     }
   }
@@ -1918,9 +1950,9 @@ $('fixX').addEventListener('click',hideFix);
 
 /* ---------- quick keys ---------- */
 const keysEl=$('keys');
-keysEl.innerHTML=KEYS.map(k=>k[0]==='sep'?'<button class="k sep" tabindex="-1" aria-hidden="true"></button>':k[2]===2?'<button class="k act" data-a="entry">'+esc(k[0])+'</button>':'<button class="k'+(k[2]?' w':'')+'" data-t="'+esc(k[1])+'">'+esc(k[0])+'</button>').join('');
+keysEl.innerHTML=KEYS.map(k=>k[0]==='sep'?'<button class="k sep" tabindex="-1" aria-hidden="true"></button>':k[2]===2?'<button class="k act" data-a="entry">'+esc(k[0])+'</button>':k[2]===3?'<button class="k w" data-a="quote" aria-label="Keep text as a name (quotes)">'+esc(k[0])+'</button>':'<button class="k'+(k[2]?' w':'')+'" data-t="'+esc(k[1])+'">'+esc(k[0])+'</button>').join('');
 keysEl.addEventListener('pointerdown',e=>{if(e.target.closest('button'))e.preventDefault();});
-keysEl.addEventListener('click',e=>{const a=e.target.closest('button[data-a]');if(a){addEntry();return;}const b=e.target.closest('button[data-t]');if(b)insertText(b.dataset.t);});
+keysEl.addEventListener('click',e=>{const a=e.target.closest('button[data-a]');if(a){if(a.dataset.a==='quote')wrapQuote();else addEntry();return;}const b=e.target.closest('button[data-t]');if(b)insertText(b.dataset.t);});
 function insertText(t){
   ed.focus({preventScroll:true});
   let ok=false;try{ok=document.execCommand('insertText',false,t);}catch(e){}
@@ -2124,6 +2156,7 @@ menu.addEventListener('click',e=>{
   const b=e.target.closest('[data-act]');if(!b)return;const a=b.dataset.act;
   if(a==='new'){newSheet();return;}
   if(a==='dup'){newSheet(cur().text,(cur().title||'Sheet')+' copy');return;}
+  if(a==='foldall'||a==='unfoldall'){closeAll();foldAll(a==='foldall');return;}
   if(a==='folder'){closeAll();openFolderPicker(cur().id);return;}
   if(a==='guide'){buildGuide();openModal($('guideM'));return;}
   if(a==='block'){openBlock();return;}
@@ -2215,8 +2248,10 @@ const GUIDE=[
  ['9. Tags',false,'<p>Ilagay ang <code>#tag</code> sa dulo ng linya. Isulat ang <code>#food</code> <b>mag-isa</b> para sa total ng lahat ng may tag na iyon. ⋮ → <b>Tag totals</b> para sa listahan.</p>'+ex('tags')],
  ['10. Tap-to-fix, sheets, export',false,'<ul><li><b>Tap-to-fix:</b> i-tap ang number, gamitin ang − / + (hold para tuloy-tuloy), piliin ang step. Puwedeng patayin sa Settings.</li><li><b>☰ drawer:</b> mga sheet, New sheet, at mga template (Salary split, Budget tracker, Wallet ledger, Linked funds, Cash flow).</li><li><b>⋮ menu:</b> Copy as text, .txt, .csv, Print, Install app, Sync now.</li></ul>'],
  ['11. Folders (Personal, Business…)',false,'<p>Para hindi magkahalo ang mga sheet: ☰ → <b>Folder</b> para gumawa (hal. Personal, Business). Pindutin ang <b>icon ng folder</b> sa tabi ng sheet para ilipat ito, o ⋮ → <b>Move to folder…</b>.</p><ul><li>Bawat folder ay may <b>sariling kulay</b>. Lumalabas ang pangalan at kulay sa itaas ng sheet.</li><li>I-tap ang pangalan ng folder sa drawer para i-collapse o i-expand. Ang <b>+</b> sa folder ay gumagawa ng bagong sheet sa loob nito.</li><li>Rename o delete sa <b>Move to folder…</b>. Hindi nabubura ang mga sheet kapag nag-delete ng folder.</li><li>Nasi-sync din ang folder ng bawat sheet sa cloud.</li></ul>'],
- ['12. Sync at install',false,'<ul><li><b>Cloud sync:</b> Settings → Cloud sync. Libreng Firebase mo ang gamit, may step-by-step doon. Nagsi-sync kapag binuksan ang app, kapag bumalik sa tab, at kapag pinindot ang <b>Sync now</b>.</li><li><b>Install:</b> kapag naka-host sa HTTPS, ⋮ → Install app (Android). Sa iPhone: Share → Add to Home Screen. Gumagana na ito offline pagkatapos.</li></ul>'],
- ['13. Madalas na pagkakamali',false,'<ul><li>Hindi gumagana ang <code>@budget</code>? Dapat nasa <b>unang linya</b> ng block, at walang blank line sa pagitan.</li><li>Hindi pumapasok sa group? Kailangan ng <b>2 space</b> bago ang linya.</li><li>Naghalo ang dalawang listahan? Maglagay ng blank line o <code># heading</code>.</li><li>Hindi mahanap ang pangalan? Dapat eksakto ang spelling (hindi mahalaga ang laki ng letra).</li><li>Maraming decimals o walang comma? Tingnan ang Settings.</li></ul>']
+ ['12. Hide/show entries',false,'<p><b>▾ / ▸</b> sa kaliwa ng group (o sa kanan, sa tabi ng bilang na <code>3×</code>) ay nagtatago o nagpapakita ng entries. Para sa lahat: ⋮ → <b>Hide all entries</b> / <b>Show all entries</b>. Kung naka-off ang line numbers, nandoon pa rin ang ▾ sa kaliwa.</p>'],
+ ['13. Sync at install',false,'<ul><li><b>Cloud sync:</b> Settings → Cloud sync. Libreng Firebase mo ang gamit, may step-by-step doon. Nagsi-sync kapag binuksan ang app, kapag bumalik sa tab, at kapag pinindot ang <b>Sync now</b>.</li><li><b>Install:</b> kapag naka-host sa HTTPS, ⋮ → Install app (Android). Sa iPhone: Share → Add to Home Screen. Gumagana na ito offline pagkatapos.</li></ul>'],
+ ['14. Pangalan na may number',false,'<p>Para hindi mabasa bilang halaga ang number sa pangalan:</p><ul><li>Ang <code>EASYSHOP2</code>, <code>A4</code> at <code>4in1</code> ay awtomatikong pangalan na. Hindi sila kukuwentahin, at kasama ang number sa title o label.</li><li>Para sa <code>7/11</code> o <code>7-Eleven</code>, ilagay sa <b>quotes</b>: <code>"7/11" snacks -85</code>. Ang button na <code>"…"</code> sa key row ay naglalagay ng quotes (o binabalot ang salitang kinatatayuan mo).</li><li>Kung gusto mong bilangin pa rin ang number sa loob ng salita: Settings → <b>Numbers inside names</b> → Count as amount.</li></ul>'],
+ ['15. Madalas na pagkakamali',false,'<ul><li>Hindi gumagana ang <code>@budget</code>? Dapat nasa <b>unang linya</b> ng block, at walang blank line sa pagitan.</li><li>Hindi pumapasok sa group? Kailangan ng <b>2 space</b> bago ang linya.</li><li>Naghalo ang dalawang listahan? Maglagay ng blank line o <code># heading</code>.</li><li>Hindi mahanap ang pangalan? Dapat eksakto ang spelling (hindi mahalaga ang laki ng letra).</li><li>Maraming decimals o walang comma? Tingnan ang Settings.</li></ul>']
 ];
 function buildGuide(){
   $('guideB').innerHTML='<p class="note" style="margin-top:12px">Pindutin ang bawat seksyon. May <b>Try in new sheet</b> sa mga halimbawa.</p>'+GUIDE.map(([h,open,b])=>'<details class="gd"'+(open?' open':'')+'><summary>'+h+'</summary><div class="gb">'+b+'</div></details>').join('');
@@ -2257,7 +2292,8 @@ const SET=[
  ['tapFix','Tap a number to fix it',[[true,'On'],[false,'Off']]],
  ['statScope','Bottom bar totals',[['block','This block'],['sheet','Whole sheet']]],
  ['showBal','Running balance in trackers',[[true,'On'],[false,'Off']]],
- ['autoDate','Auto-date new entries',[[true,'On'],[false,'Off']]]
+ ['autoDate','Auto-date new entries',[[true,'On'],[false,'Off']]],
+ ['numWords','Numbers inside names (4in1, A4)',[['text','Part of the name'],['amount','Count as amount']]]
 ];
 function buildSettings(){
   const s=state.settings;
